@@ -554,19 +554,9 @@ func cmdArchive(a []string) error {
 		return nil
 	}
 
-	name := "lab"
+	name := ""
 	if len(pos) > 0 {
-		name = slug(strings.Join(pos, " "))
-	}
-	stamp := time.Now().Format("2006-01-02-1504")
-	dir := filepath.Join(root, "archive")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	outFile := filepath.Join(dir, name+"-"+stamp+".html")
-	rel, _ := filepath.Rel(root, outFile)
-	if rel == "" {
-		rel = outFile
+		name = strings.Join(pos, " ")
 	}
 
 	// Confirm, since this clears every host.
@@ -574,7 +564,7 @@ func cmdArchive(a []string) error {
 		if !isTTY(os.Stdin) {
 			return fmt.Errorf("this clears all %d host(s). Re-run with --yes to confirm.", n)
 		}
-		fmt.Fprintf(os.Stderr, "Archive %d host(s) to %s and clear the tracker? [y/N] ", n, rel)
+		fmt.Fprintf(os.Stderr, "Archive %d host(s) and clear the tracker? [y/N] ", n)
 		line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
 		switch strings.ToLower(strings.TrimSpace(line)) {
 		case "y", "yes":
@@ -584,24 +574,50 @@ func cmdArchive(a []string) error {
 		}
 	}
 
+	rel, _, err := writeArchive(s, name)
+	if err != nil {
+		return err
+	}
+	if err := clearAll(s); err != nil {
+		return err
+	}
+	ok(green("archived ") + fmt.Sprintf("%d host(s) -> ", n) + bold(rel))
+	fmt.Println(dim("tracker is now empty. Open the file in a browser to view the snapshot."))
+	return nil
+}
+
+// writeArchive renders the snapshot HTML, writes it under archive/, and returns
+// its repo-relative path plus the HTML. It does NOT clear the tracker.
+func writeArchive(s *Store, name string) (rel, htmlDoc string, err error) {
+	if name = slug(name); name == "lab" {
+		// slug("") -> "lab"
+	}
+	stamp := time.Now().Format("2006-01-02-1504")
+	dir := filepath.Join(root, "archive")
+	if err = os.MkdirAll(dir, 0o755); err != nil {
+		return
+	}
+	outFile := filepath.Join(dir, name+"-"+stamp+".html")
+	rel, _ = filepath.Rel(root, outFile)
+	if rel == "" {
+		rel = outFile
+	}
 	title := name
 	if title == "lab" {
 		title = "Lab archive"
 	}
-	htmlDoc := renderArchiveHTML(s, title, stamp)
-	if err := os.WriteFile(outFile, []byte(htmlDoc), 0o644); err != nil {
-		return err
-	}
+	htmlDoc = renderArchiveHTML(s, title, stamp)
+	err = os.WriteFile(outFile, []byte(htmlDoc), 0o644)
+	return
+}
 
-	// Wipe the tracker.
+// clearAll empties the tracker and forgets the focused target.
+func clearAll(s *Store) error {
 	s.Hosts = []Host{}
 	if err := save(s); err != nil {
 		return err
 	}
-	os.Remove(currF) // the focused target no longer exists
-
-	ok(green("archived ") + fmt.Sprintf("%d host(s) -> ", n) + bold(rel))
-	fmt.Println(dim("tracker is now empty. Open the file in a browser to view the snapshot."))
+	os.Remove(currF)
 	return nil
 }
 
@@ -809,6 +825,39 @@ func cmdServe(a []string) error {
 		default:
 			http.Error(w, "method not allowed", 405)
 		}
+	})
+
+	// Archive + clear from the dashboard.
+	mux.HandleFunc("/api/archive", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", 405)
+			return
+		}
+		var body struct {
+			Name string `json:"name"`
+		}
+		json.NewDecoder(r.Body).Decode(&body) // name is optional
+		s, err := load()
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		if len(s.Hosts) == 0 {
+			http.Error(w, "nothing to archive", 400)
+			return
+		}
+		n := len(s.Hosts)
+		rel, htmlDoc, err := writeArchive(s, body.Name)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		if err := clearAll(s); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		writeJSON(w, map[string]any{"ok": true, "file": rel, "count": n, "html": htmlDoc})
 	})
 
 	// Allowlist: the page and the data file only. Everything else (binary,
