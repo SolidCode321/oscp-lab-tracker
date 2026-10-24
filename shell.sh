@@ -32,6 +32,11 @@ oscp() {
 # With no argument, reuses the last focused target.
 target() { eval "$(oscp env ${1:+"$1"})"; }
 
+# Run the live dashboard server in the background, on demand (needs tmux).
+oscp-up()   { tmux has-session -t oscp 2>/dev/null && { echo "already running -> http://127.0.0.1:8777"; return; }; tmux new -d -s oscp "$OSCP_DIR/oscp serve" && echo "started -> http://127.0.0.1:8777"; }
+oscp-down() { tmux kill-session -t oscp 2>/dev/null && echo "stopped" || echo "not running"; }
+oscp-log()  { tmux attach -t oscp; }   # view output; Ctrl-B then D to leave it running
+
 # Tab-completion for `target`, from the host names in the tracker.
 _oscp_targets() { oscp ls 2>/dev/null | awk 'NR>1 && NF && $0 !~ /host\(s\)/ {print $1}'; }
 if [ -n "$ZSH_VERSION" ]; then

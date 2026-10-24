@@ -1,70 +1,114 @@
 # OSCP Lab Tracker
 
-A fast, single-binary target tracker for OSCP / HTB / lab work. One JSON file
-holds every host (IP, hostname, OS, ports, creds, flag, notes). You update it
-with a tiny CLI, keep a live dashboard open in the browser, and pull `$ip` /
-`$domain` straight into your shell while you work. Host the read-only view free
-on **Cloudflare Pages** from **GitHub**.
+A fast, single-binary target tracker for OSCP / HTB / lab work. One JSON file holds
+every host — IP, hostname, OS, ports, creds, flag, notes. You update it with a tiny
+CLI, pull `$ip` / `$domain` straight into your shell, keep a live dashboard open in the
+browser, and (optionally) host a read-only mirror free on Cloudflare Pages from GitHub.
 
 No runtime, no dependencies — just one Go binary you can leave running on Kali.
 
+---
+
+## Contents
+
+1. [What's in the box](#1-whats-in-the-box)
+2. [Quick setup (one command)](#2-quick-setup-one-command)
+3. [Manual setup](#3-manual-setup)
+4. [The config file](#4-the-config-file)
+5. [CLI reference](#5-cli-reference)
+6. [`$ip` / `$domain` in your shell](#6-ip--domain-in-your-shell)
+7. [The live dashboard](#7-the-live-dashboard)
+8. [A full lab session, step by step](#8-a-full-lab-session-step-by-step)
+9. [Handling multiple IPs](#9-handling-multiple-ips)
+10. [Finishing a lab (archive / clear)](#10-finishing-a-lab-archive--clear)
+11. [Hosting the mirror on GitHub + Cloudflare](#11-hosting-the-mirror-on-github--cloudflare)
+12. [Data, sync and git](#12-data-sync-and-git)
+
+---
+
+## 1. What's in the box
+
 ```
 oscp-lab-tracker/
-├── oscp.go             # the whole tool (CLI + live server) — one Go file
+├── setup.sh            # one-command first-time setup
+├── oscp.go             # the whole tool (CLI + live server), one Go file
 ├── index.html          # the web dashboard (served live, or static on Cloudflare)
-├── data/hosts.json     # your data — the single source of truth
-├── oscp.conf.example   # config template → copy to oscp.conf and edit
-├── shell.sh            # `target <box>` → sets $ip $domain $user $pass …
-├── _headers            # tells Cloudflare not to cache the data file
-├── .gitignore
+├── data/hosts.json     # your data — the single source of truth (starts empty)
+├── oscp.conf.example   # config template → copied to oscp.conf by setup
+├── shell.sh            # defines  oscp, target, oscp-up/down/log
+├── wrangler.jsonc      # Cloudflare static-hosting config
+├── _headers            # stops Cloudflare caching the data file
 └── README.md
 ```
 
-How the parts fit together:
+How the parts talk to each other:
 
 ```
-        oscp (CLI) ──writes──▶ data/hosts.json ◀──reads── oscp serve ──▶ browser (live)
-            │                        │
-   target <box> ─exports─▶ $ip $domain …      └──committed by── oscp push ─▶ Cloudflare Pages
+   oscp (CLI) ──writes──▶ data/hosts.json ◀──reads── oscp serve ──▶ browser dashboard (live)
+       │                       │
+ target <box> ─▶ $ip $domain   └─ oscp push ─▶ GitHub ─▶ Cloudflare (read-only mirror)
 ```
 
 ---
 
-## 1. Build it (once)
+## 2. Quick setup (one command)
 
-You need Go (1.20+). On Kali:
+Clone, then run the installer:
 
 ```bash
-sudo apt update && sudo apt install -y golang-go      # if you don't have it
+git clone https://github.com/<you>/oscp-lab-tracker.git
 cd oscp-lab-tracker
-go build -o oscp oscp.go
+chmod +x setup.sh
+./setup.sh
+source ~/.zshrc        # or ~/.bashrc — setup tells you which
 ```
 
-That produces a single `oscp` binary. A prebuilt Linux/amd64 `oscp` is included in
-the download for convenience — if it runs (`./oscp help`), you can skip the build;
-if not (wrong arch, or you'd rather not trust a prebuilt), just build it as above.
+`setup.sh` installs Go if needed (asks first), builds the `oscp` binary, creates your
+`oscp.conf`, and wires `oscp` / `target` / `oscp-up` into your shell. That's it.
 
-> The binary and your personal `oscp.conf` are gitignored, so they never get pushed.
+> **Cloning a private repo** needs auth, not your GitHub password. Either use a
+> Personal Access Token as the password, or set up SSH and clone with
+> `git@github.com:<you>/oscp-lab-tracker.git`. See [section 11](#11-hosting-the-mirror-on-github--cloudflare).
 
 ---
 
-## 2. Configure it
+## 3. Manual setup
+
+If you'd rather not run the script:
 
 ```bash
+# 1. Build (install Go first if needed: sudo apt install -y golang-go)
+go build -o oscp oscp.go
+
+# 2. Config
 cp oscp.conf.example oscp.conf
+
+# 3. Shell integration — gives you oscp, target, oscp-up/down/log everywhere
+echo "export OSCP_DIR=$PWD" >> ~/.zshrc
+echo 'source "$OSCP_DIR/shell.sh"' >> ~/.zshrc
+source ~/.zshrc
+
+# 4. (for the background dashboard) make sure tmux is installed
+sudo apt install -y tmux
 ```
+
+Use `~/.bashrc` instead of `~/.zshrc` if you're on bash.
+
+---
+
+## 4. The config file
 
 `oscp.conf` is plain `key = value` (lines starting `#` are comments):
 
 ```ini
-# Address `oscp serve` listens on.
+# Address the dashboard server listens on.
 addr = 127.0.0.1:8777
 
-# Your deployed site URL — printed after `oscp push` as a reminder.
-site = https://oscp-lab-tracker.pages.dev
+# Your deployed site URL — printed after `oscp push` as a reminder. Optional.
+site = https://oscp.alexsecurity.online
 
 # Fallback domain for `target` when a host has no hostname of its own.
-# Set this once for a single-AD lab; change this one line when the domain changes.
+# Set it once for a single-AD lab; change this one line when the domain changes.
 domain =
 ```
 
@@ -72,10 +116,9 @@ It's optional — without it the defaults above apply.
 
 ---
 
-## 3. The CLI
+## 5. CLI reference
 
-Run from anywhere once you've set up the shell integration (step 5); otherwise
-`./oscp <command>` from the repo folder.
+Run from anywhere once the shell integration is set up; otherwise `./oscp <command>`.
 
 | Command | What it does |
 |---|---|
@@ -83,210 +126,231 @@ Run from anywhere once you've set up the shell integration (step 5); otherwise
 | `oscp ls` | List all hosts as a table |
 | `oscp show <name\|ip>` | Full detail for one host |
 | `oscp set <host> <field> <value>` | Set `ip` / `hostname` / `os` / `name` |
-| `oscp port <host> "<ports>"` | Set the ports string (`--add` to append) |
+| `oscp port <host> "<ports>"` | Set the ports string (`--add` to append new ones) |
 | `oscp cred <host> "<user : pass>"` | Append a credential line |
 | `oscp note <host> "<text>"` | Append a note (`-t` prefixes the time) |
 | `oscp flag <host> none\|user\|root` | Mark flag captured |
-| `oscp rm <host>` | Delete a host |
+| `oscp rm <host>` | Delete one host |
+| `oscp archive [name] [-y]` | Save an HTML snapshot of all hosts, then clear the tracker |
+| `oscp clear [-y]` | Wipe all hosts (no snapshot) |
 | `oscp env [host]` | Print shell exports (used by `target`) |
-| `oscp archive [name] [-y]` | Save an HTML snapshot of every host, then clear the tracker |
 | `oscp serve [--addr host:port]` | Run the live dashboard + API |
 | `oscp push ["msg"]` | `git commit` + `push` the data file |
 
-`<host>` matches an exact name or IP first, then a partial on name/hostname/IP;
-if it's ambiguous it lists the candidates. Colour output turns off with `NO_COLOR=1`.
-
-A real session:
-
-```bash
-oscp add Sauna --ip 10.10.11.42 --os Windows
-oscp port Sauna "53, 88, 135, 389, 445, 5985"
-oscp port Sauna "3268, 3269" --add
-oscp cred Sauna "svc_backup : Password123!"
-oscp note Sauna -t "AS-REP roast on svc_backup, cracked offline"
-oscp flag Sauna user
-oscp show Sauna
-oscp push "sauna: user flag"
-```
+- `<host>` matches an exact name/IP first, then a partial on name/hostname/IP; if it's
+  ambiguous it lists the candidates so you can be specific.
+- Colour output turns off with `NO_COLOR=1`.
+- `port` replaces the whole string by default; `--add` merges in new ports without dupes.
+- `cred` and `note` always append a line, building up a list.
 
 ---
 
-## 4. The live dashboard
+## 6. `$ip` / `$domain` in your shell
 
-Leave the server running all session:
-
-```bash
-./oscp serve
-# oscp serving on http://127.0.0.1:8777
-```
-
-Open `http://127.0.0.1:8777`. The page shows a green **live** badge and
-**auto-refreshes every few seconds**, so as you run `oscp` commands in another
-terminal the dashboard updates itself — no reload. Each host card has **Copy
-exports** (the `export ip=…` block) and **Copy summary** buttons, a filter box,
-and a light/dark toggle.
-
-When the same `index.html` is served by Cloudflare (no API behind it) the page
-falls back to a read-only **static** view of `data/hosts.json`.
-
----
-
-## 5. `$ip` and `$domain` in your lab shell
-
-A program can't set variables in the shell that launched it, so this uses a small
-shell function. Add two lines to your `~/.bashrc` or `~/.zshrc`:
+A program can't set variables in the shell that launched it, so this uses the `target`
+function (defined in `shell.sh`).
 
 ```bash
-export OSCP_DIR="$HOME/oscp-lab-tracker"     # wherever you put the repo
-source "$OSCP_DIR/shell.sh"
-```
-
-Open a new terminal, then:
-
-```bash
-target sauna                 # focus a box
-echo $ip                     # 10.10.11.42
+target forest          # focus a box
+echo $ip               # 10.10.10.161
 nmap -sCV -p- $ip
 smbclient -L //$ip -U "$user%$pass"
 curl http://$domain/
-feroxbuster -u http://$ip/
-
-target                       # with no name: reloads the last focused box
+target                 # no name → reload the last focused box (handy in a new terminal)
 ```
 
 `target <box>` sets, in your current shell:
 
-| var | from |
+| variable | value |
 |---|---|
 | `$ip`, `$rhost` | the host's IP |
-| `$domain` | its hostname (or the `domain` in `oscp.conf` if it has none) |
+| `$domain` | its hostname (or the `domain` from `oscp.conf` if it has none) |
 | `$box` | the host's name |
-| `$user`, `$pass` | parsed from its first credential line |
+| `$user`, `$pass` | parsed from its **first** credential line |
 
-It also defines `oscp` (so the CLI works anywhere) and tab-completion for `target`.
-
----
-
-## 6. Leave it running on Kali
-
-Keep the server up across terminals. Two easy ways:
-
-**tmux** (simplest):
-
-```bash
-tmux new -d -s oscp "$HOME/oscp-lab-tracker/oscp serve"
-# reattach anytime:  tmux attach -t oscp
-```
-
-**systemd user service** (starts on login, restarts if it dies):
-
-```bash
-mkdir -p ~/.config/systemd/user
-cat > ~/.config/systemd/user/oscp.service <<EOF
-[Unit]
-Description=OSCP Lab Tracker
-[Service]
-ExecStart=%h/oscp-lab-tracker/oscp serve
-Restart=always
-[Install]
-WantedBy=default.target
-EOF
-systemctl --user daemon-reload
-systemctl --user enable --now oscp
-# logs:  journalctl --user -u oscp -f
-```
-
-Keep `addr` on `127.0.0.1` so the dashboard (which shows credentials) is reachable
-only from your own machine.
+Tab-completion for `target` is set up too — type `target ` and press Tab.
 
 ---
 
-## 7. Host the read-only site on GitHub + Cloudflare Pages (free)
+## 7. The live dashboard
 
-### a. Push to GitHub — make the repo **Private** (it holds creds)
+Start it in the background whenever you want it:
 
 ```bash
-cd oscp-lab-tracker
+oscp-up        # starts the server → http://127.0.0.1:8777
+oscp-down      # stop it
+oscp-log       # watch its output (Ctrl-B then D to leave it running)
+```
+
+Open `http://127.0.0.1:8777`. It shows a green **live** badge and **auto-refreshes**, so
+as you run `oscp` commands in another terminal the board updates itself — no reload. Each
+card has **Copy exports** and **Copy summary**; the toolbar has a filter, a theme toggle,
+and two red buttons in live mode:
+
+- **Archive & clear** — download an HTML snapshot of everything, then empty the tracker.
+- **Clear** — wipe all hosts, no snapshot (two-click confirm).
+
+Stopping the server never touches your data — it's all in `data/hosts.json` on disk.
+`oscp-down` then `oscp-up` brings everything back exactly as it was.
+
+**Live vs static:** when the page is served by `oscp serve` it's live (editable actions,
+auto-refresh). The copy hosted on Cloudflare has no backend, so it's always a read-only
+**static** mirror — that's expected, and why the Archive/Clear buttons only appear locally.
+
+---
+
+## 8. A full lab session, step by step
+
+```bash
+oscp-up                                   # (optional) open the dashboard on a 2nd monitor
+
+# get a box
+oscp add Forest --ip 10.10.10.161 --os Windows
+target forest                             # $ip now = 10.10.10.161
+
+# recon
+nmap -sCV -p- $ip
+oscp port forest "53,88,135,139,389,445,464,593,636,3268,5985,9389"
+oscp port forest "47001,49664" --add      # append more found later
+oscp set forest hostname forest.htb.local # feeds $domain
+
+# as you work
+oscp cred forest "svc-alfresco : s3rvice" # first cred line fills $user/$pass
+oscp note forest -t "AS-REP roast svc-alfresco, cracked"
+oscp note forest -t "WriteDACL via Exchange group -> DCSync"
+oscp flag forest user                     # local.txt
+oscp flag forest root                     # proof.txt
+
+# move around
+oscp ls                                   # overview of every box + flags
+oscp show forest                          # full detail of one
+target sauna                              # switch focus to another box
+
+# if an IP changes (DHCP / reset)
+oscp set forest ip 10.10.10.200
+```
+
+---
+
+## 9. Handling multiple IPs
+
+**Many machines (the normal case).** Each machine is its own host — just `oscp add` each.
+No limit; `oscp ls` lists them all and `target <name>` jumps between them. `$ip` always
+points at whichever box you last focused.
+
+```bash
+oscp add Sauna --ip 10.10.10.175
+oscp add Forest --ip 10.10.10.161
+target sauna      # $ip = 10.10.10.175
+target forest     # $ip = 10.10.10.161
+```
+
+**One machine with several IPs** (dual-homed, or after you pivot and it has an internal
+address too). A host holds one `ip` — the one you attack over your VPN. For the extra:
+
+- Record it in notes:
+  ```bash
+  oscp note forest "internal NIC: 172.16.1.5 (via pivot)"
+  ```
+- Or, if you'll work heavily on the internal IP and want `$ip` to give it to you directly,
+  make a second entry for that interface:
+  ```bash
+  oscp add Forest-int --ip 172.16.1.5 --os Windows
+  oscp note forest-int "internal face of Forest (10.10.10.161), via chisel"
+  target forest-int      # $ip = 172.16.1.5
+  ```
+
+Rule of thumb: **one host = one machine, one IP in the `ip` field.** Extra IPs live in
+notes; promote one to its own entry only when you need `$ip` to produce it on demand.
+
+---
+
+## 10. Finishing a lab (archive / clear)
+
+```bash
+oscp archive "exam-attempt-1"    # -> archive/exam-attempt-1-<date>.html, then empties the tracker
+oscp clear                       # just wipe, no snapshot
+```
+
+`archive` writes a self-contained HTML report of every host (IPs, ports, creds, notes) to
+`archive/`, opens offline in any browser, then clears the tracker so the next lab starts
+clean. Both ask for confirmation; pass `-y` to skip it. The same two actions are the red
+buttons on the live dashboard.
+
+---
+
+## 11. Hosting the mirror on GitHub + Cloudflare
+
+This is optional — the tool works fully offline. Hosting gives you a read-only copy of
+your notebook reachable from anywhere.
+
+### a. Push to GitHub — make the repo **Private** (it holds credentials)
+
+```bash
 git init
-git add .
+git add -A
 git commit -m "initial commit"
 git branch -M main
-git remote add origin git@github.com:<you>/oscp-lab-tracker.git
+git remote add origin https://github.com/<you>/oscp-lab-tracker.git
 git push -u origin main
 ```
 
-### b. Connect Cloudflare Pages
+**Auth:** GitHub no longer accepts your password for git. Use one of:
 
-1. Cloudflare dashboard → **Workers & Pages** → **Create** → **Pages** → **Connect to Git**.
-2. Pick the `oscp-lab-tracker` repo.
-3. Build settings — it's a plain static site, so:
-   - **Framework preset:** `None`
-   - **Build command:** *(leave empty)*
-   - **Build output directory:** `/`
-4. **Save and Deploy.** You get a URL like `oscp-lab-tracker.pages.dev` — put that in `oscp.conf` as `site`.
+- **Personal Access Token** — GitHub → Settings → Developer settings → Personal access
+  tokens → Fine-grained → repo `oscp-lab-tracker`, Contents: Read and write. Paste the
+  token when git asks for the *password*. Cache it with `git config --global credential.helper store`.
+- **SSH** — `ssh-keygen -t ed25519`, add `~/.ssh/id_ed25519.pub` at GitHub → SSH keys,
+  and use the `git@github.com:<you>/…` remote. No tokens to manage.
 
-From then on every `git push` (including `oscp push`) redeploys in ~30s.
+### b. Deploy on Cloudflare
 
-### c. Lock it down with Cloudflare Access
+Workers & Pages → **Create** → **Pages** → **Connect to Git** → pick the repo.
+Build command: empty (or `echo ok` if it insists); **Build output directory:** `/`.
+Deploy. If the dashboard only gives you the Workers "Import a repository" flow (which
+demands a deploy command), the included `wrangler.jsonc` makes it work — set
+**Deploy command:** `npx wrangler deploy`.
 
-A `.pages.dev` URL is public to anyone with the link, and yours holds credentials.
-Gate it (free tier):
+Add a custom domain under the project's **Custom domains** (e.g. `oscp.alexsecurity.online`).
 
-- Pages project → **Settings** → **Access policy** → enable, and add a policy allowing
-  only your own email. The site then requires a one-time login before it loads.
+### c. Lock it down — required
 
-That gives you a private, login-gated, synced copy of your notebook with no auth code.
+The site serves `data/hosts.json` (your creds) and the URL is public. Gate it with
+**Cloudflare Access** (Zero Trust, free): project → Settings → Access policy → allow only
+your own email. The site then needs a one-time login before it loads.
 
-> On the hosted copy, `index.html`, `oscp.go`, and the README are also fetchable
-> behind the Access gate — that's fine (your own tool, no secrets). The secret is
-> `data/hosts.json`; Access is what protects it. Your local `oscp.conf` is
-> gitignored and never deployed.
-
----
-
-## 8. Finishing a lab
-
-When you're done with a set of boxes, snapshot and clear in one step:
-
-```bash
-oscp archive "pg-practice"     # -> archive/pg-practice-2026-10-24-1500.html, then empties the tracker
-```
-
-It writes a self-contained HTML report of every host (all IPs, ports, creds, notes)
-to the `archive/` folder, then removes all hosts so you start the next lab clean. The
-file opens in any browser offline — no server needed. It asks for confirmation first;
-pass `-y` to skip the prompt.
-
-> `archive/` is gitignored — the snapshots hold credentials, so they stay on your
-> machine and are never pushed.
+From then on, every `git push` (or `oscp push`) redeploys the mirror in ~30s.
 
 ---
 
-## 9. When a domain changes
+## 12. Data, sync and git
 
-- **One box changed:** `oscp set sauna hostname dc02.megabank.local` — then
-  `target sauna` re-exports the new `$domain`.
-- **Whole-lab default:** edit the `domain =` line in `oscp.conf`. Every host without
-  its own hostname picks it up on the next `target`.
+`data/hosts.json` is your single source of truth and it's tracked in git (so the hosted
+mirror can read it). That has one consequence worth knowing:
 
----
+- Your live hosts show up as git changes. A `git pull` on a machine that has local edits
+  will refuse to overwrite them.
+- If you use more than one machine (say a Mac for the repo and Kali for the labs), pick
+  **one** as your working copy. Edit there, `oscp push`, and `git pull` on the other
+  before you start — or just do all your lab work on the one box.
 
-## 10. Data format
+`data/hosts.json` starts **empty**, so a fresh clone or a cleared tracker opens blank,
+ready for your first `oscp add`.
 
-`data/hosts.json`:
+### Data format
 
 ```json
 {
   "hosts": [
     {
       "id": "h...",
-      "name": "Sauna",
-      "ip": "10.10.11.42",
-      "hostname": "dc01.megabank.local",
+      "name": "Forest",
+      "ip": "10.10.10.161",
+      "hostname": "forest.htb.local",
       "os": "Windows",
-      "ports": "53, 88, 135, 389, 445, 5985",
-      "creds": "svc_backup : Password123!",
-      "flag": "user",
+      "ports": "53, 88, 389, 445, 5985",
+      "creds": "svc-alfresco : s3rvice",
+      "flag": "root",
       "notes": "..."
     }
   ],
@@ -294,6 +358,6 @@ pass `-y` to skip the prompt.
 }
 ```
 
-`ports`, `creds`, and `notes` are free-text strings (newlines allowed), so you can
-paste raw nmap output or scribble whatever you like. The CLI, the server, and the
-site all treat them the same way.
+`ports`, `creds` and `notes` are free-text strings (newlines allowed), so you can paste
+raw nmap output or scribble whatever you like. The CLI, the server and the site all treat
+them the same way.
