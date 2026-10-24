@@ -1,0 +1,3 @@
+# Cloudflare Pages — never cache the data file, so edits show up on the live site immediately.
+/data/*
+  Cache-Control: no-cache, no-store, must-revalidate

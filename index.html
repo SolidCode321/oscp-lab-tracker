@@ -1,0 +1,322 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>OSCP Lab Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap">
+<style>
+  /* Layout: sticky header with counts + filter, then a stack of per-host cards; read-only view of data/hosts.json */
+  :root {
+    --bg:#f4f5f7; --surface:#fff; --surface-2:#eef0f3; --fg:#1a1d23; --fg-dim:#5b616e; --fg-faint:#8a909c;
+    --line:#d9dce2; --line-soft:#e6e8ec; --accent:#1f6feb; --accent-soft:#e4eeff;
+    --good:#1a7f4b; --good-soft:#dcf3e6; --warn:#b06a00; --warn-soft:#fbeecf; --crit:#c23030;
+    --mono:'JetBrains Mono',ui-monospace,'SF Mono',Menlo,Consolas,monospace;
+    --sans:'Inter',system-ui,-apple-system,'Segoe UI',sans-serif;
+    --radius:9px; --shadow:0 1px 2px rgba(20,25,35,.06),0 2px 8px rgba(20,25,35,.04);
+    color-scheme:light;
+  }
+  @media (prefers-color-scheme:dark){ :root:not([data-theme="light"]){
+    --bg:#0d1016; --surface:#161a22; --surface-2:#1d222c; --fg:#e7eaf0; --fg-dim:#9aa2b1; --fg-faint:#6b7280;
+    --line:#2a303b; --line-soft:#222832; --accent:#4b8dff; --accent-soft:#15233d;
+    --good:#4ac07e; --good-soft:#10261a; --warn:#d99a3a; --warn-soft:#2a2011; --crit:#e5736b;
+    --shadow:0 1px 2px rgba(0,0,0,.3),0 2px 10px rgba(0,0,0,.25); color-scheme:dark;
+  }}
+  :root[data-theme="dark"]{
+    --bg:#0d1016; --surface:#161a22; --surface-2:#1d222c; --fg:#e7eaf0; --fg-dim:#9aa2b1; --fg-faint:#6b7280;
+    --line:#2a303b; --line-soft:#222832; --accent:#4b8dff; --accent-soft:#15233d;
+    --good:#4ac07e; --good-soft:#10261a; --warn:#d99a3a; --warn-soft:#2a2011; --crit:#e5736b;
+    --shadow:0 1px 2px rgba(0,0,0,.3),0 2px 10px rgba(0,0,0,.25); color-scheme:dark;
+  }
+
+  *{box-sizing:border-box;}
+  html,body{margin:0;background:var(--bg);color:var(--fg);}
+  body{font-family:var(--sans);line-height:1.45;font-size:14px;-webkit-font-smoothing:antialiased;
+       padding-top:env(safe-area-inset-top,0);padding-bottom:env(safe-area-inset-bottom,0);}
+  img{max-width:100%;}
+  [hidden]{display:none!important;}
+
+  .wrap{max-width:920px;margin:0 auto;
+        padding-left:max(16px,env(safe-area-inset-left,0));padding-right:max(16px,env(safe-area-inset-right,0));
+        padding-block:0 56px;}
+
+  header{position:sticky;top:0;z-index:40;background:var(--surface);border-bottom:1px solid var(--line);
+         margin:0 calc(-1 * max(16px,env(safe-area-inset-left,0)));
+         padding:10px max(16px,env(safe-area-inset-left,0));margin-bottom:18px;}
+  .head-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap;}
+  .brand{display:flex;align-items:baseline;gap:9px;margin-right:auto;}
+  .brand h1{font-size:15px;font-weight:700;letter-spacing:-.01em;margin:0;}
+  .brand .tag{font-family:var(--mono);font-size:10.5px;color:var(--fg-faint);text-transform:uppercase;letter-spacing:.08em;}
+  .badge{font-family:var(--mono);font-size:9.5px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;
+         padding:2px 7px;border-radius:20px;background:var(--surface-2);color:var(--fg-faint);}
+  .badge:empty{display:none;}
+  .badge.live{background:var(--good-soft);color:var(--good);}
+  .badge.live::before{content:"";display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--good);
+                      margin-right:5px;vertical-align:middle;animation:pulse 1.6s ease-in-out infinite;}
+  @keyframes pulse{0%,100%{opacity:1;}50%{opacity:.35;}}
+  @media (prefers-reduced-motion:reduce){.badge.live::before{animation:none;}}
+  .counts{font-family:var(--mono);font-size:11.5px;color:var(--fg-dim);display:flex;gap:10px;}
+  .counts b{color:var(--fg);font-weight:600;}
+  .counts .c-root b{color:var(--good);}
+  .toolbar{display:flex;gap:7px;align-items:center;flex-wrap:wrap;margin-top:9px;}
+  .search{flex:1 1 180px;min-width:0;font-family:var(--mono);font-size:12px;border:1px solid var(--line);
+          background:var(--bg);color:var(--fg);border-radius:7px;padding:6px 10px;}
+  .search:focus{outline:2px solid var(--accent);outline-offset:-1px;border-color:var(--accent);}
+  .btn{font-family:var(--sans);font-size:12px;font-weight:600;border:1px solid var(--line);background:var(--surface);
+       color:var(--fg-dim);border-radius:7px;padding:6px 10px;cursor:pointer;white-space:nowrap;}
+  .btn:hover{background:var(--surface-2);color:var(--fg);}
+  .btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+
+  .hosts{display:flex;flex-direction:column;gap:14px;}
+  .host{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);
+        overflow:hidden;border-left:3px solid var(--line);}
+  .host[data-flag="root"]{border-left-color:var(--good);}
+  .host[data-flag="user"]{border-left-color:var(--warn);}
+  .host-head{display:flex;align-items:center;gap:10px;padding:11px 14px;cursor:pointer;}
+  .host-head:hover{background:var(--surface-2);}
+  .chev{color:var(--fg-faint);flex:none;transition:transform .15s;font-size:11px;}
+  .host[data-open="false"] .chev{transform:rotate(-90deg);}
+  .host-id{min-width:0;flex:1 1 auto;display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;}
+  .host-name{font-weight:700;font-size:14px;letter-spacing:-.01em;}
+  .host-ip{font-family:var(--mono);font-size:12.5px;color:var(--accent);font-weight:500;}
+  .host-os{font-size:11px;color:var(--fg-dim);}
+  .pill{font-family:var(--mono);font-size:9.5px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;
+        padding:2px 7px;border-radius:20px;white-space:nowrap;flex:none;}
+  .pill-root{background:var(--good-soft);color:var(--good);}
+  .pill-user{background:var(--warn-soft);color:var(--warn);}
+  .pill-none{background:var(--surface-2);color:var(--fg-faint);}
+
+  .host-body{padding:0 14px 14px;border-top:1px solid var(--line-soft);}
+  .host[data-open="false"] .host-body{display:none;}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px;margin-top:13px;}
+  .field{display:flex;flex-direction:column;gap:3px;min-width:0;}
+  .field.wide{grid-column:1 / -1;}
+  .field label{font-family:var(--mono);font-size:9.5px;text-transform:uppercase;letter-spacing:.08em;color:var(--fg-faint);font-weight:600;}
+  .val{font-family:var(--mono);font-size:12.5px;color:var(--fg);word-break:break-word;}
+  .val.block{white-space:pre-wrap;line-height:1.55;background:var(--bg);border:1px solid var(--line-soft);
+             border-radius:6px;padding:8px 10px;overflow-x:auto;}
+  .val.notes{font-family:var(--sans);font-size:13px;}
+  .val .copy{font-family:var(--mono);font-size:10px;border:1px solid var(--line);background:var(--surface);color:var(--fg-dim);
+             border-radius:5px;padding:1px 6px;margin-left:6px;cursor:pointer;vertical-align:middle;}
+  .val .copy:hover{background:var(--surface-2);color:var(--fg);}
+  .host-foot{display:flex;justify-content:flex-end;margin-top:13px;}
+
+  .state{text-align:center;color:var(--fg-dim);font-size:13px;padding:34px 16px;border:1px dashed var(--line);border-radius:var(--radius);}
+  .state code{font-family:var(--mono);background:var(--surface-2);padding:1px 6px;border-radius:4px;font-size:12px;}
+  .state.err{border-color:var(--crit);color:var(--fg);}
+  .state .cmd{display:block;font-family:var(--mono);font-size:12px;text-align:left;background:var(--bg);
+              border:1px solid var(--line);border-radius:6px;padding:10px 12px;margin-top:12px;white-space:pre-wrap;}
+
+  footer{margin-top:22px;font-family:var(--mono);font-size:10.5px;color:var(--fg-faint);text-align:center;line-height:1.7;}
+  footer code{background:var(--surface-2);padding:1px 5px;border-radius:4px;}
+  .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(18px + env(safe-area-inset-bottom,0));z-index:60;
+         background:var(--fg);color:var(--bg);font-size:12.5px;font-weight:500;padding:8px 15px;border-radius:8px;
+         box-shadow:var(--shadow);opacity:0;pointer-events:none;transition:opacity .2s,transform .2s;}
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(-3px);}
+
+  @media (max-width:440px){ .brand .tag{display:none;} }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="head-row">
+      <div class="brand"><h1>OSCP Lab Tracker</h1><span class="tag">target notebook</span><span class="badge" id="mode"></span></div>
+      <div class="counts">
+        <span>hosts <b id="c-total">0</b></span>
+        <span class="c-root">root <b id="c-root">0</b></span>
+        <span>user <b id="c-user">0</b></span>
+      </div>
+    </div>
+    <div class="toolbar">
+      <input id="search" class="search" type="text" placeholder="filter by name / ip / os / port…" autocomplete="off" spellcheck="false">
+      <button class="btn" id="btn-reload" title="Re-fetch data/hosts.json">↻ Refresh</button>
+      <button class="btn" id="btn-theme" title="Toggle theme">◐ Theme</button>
+    </div>
+  </header>
+
+  <main>
+    <div class="hosts" id="hosts"></div>
+    <div class="state" id="state" hidden></div>
+    <footer id="footer"></footer>
+  </main>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+(function(){
+  "use strict";
+  var hostsEl=document.getElementById("hosts"),stateEl=document.getElementById("state"),
+      footerEl=document.getElementById("footer"),toastEl=document.getElementById("toast");
+  var DATA={hosts:[],updated:null}, openMap={}, toastTimer=null;
+
+  function flagLabel(f){return f==="root"?"ROOT":f==="user"?"USER":"NO FLAG";}
+  function esc(s){var d=document.createElement("div");d.textContent=(s==null?"":String(s));return d.innerHTML;}
+
+  function toast(m){toastEl.textContent=m;toastEl.classList.add("show");clearTimeout(toastTimer);
+    toastTimer=setTimeout(function(){toastEl.classList.remove("show");},1600);}
+
+  function copyText(t,msg){
+    if(!t){toast("Nothing to copy");return;}
+    if(navigator.clipboard&&navigator.clipboard.writeText){
+      navigator.clipboard.writeText(t).then(function(){toast(msg||"Copied");}).catch(function(){legacy(t,msg);});
+    }else legacy(t,msg);
+  }
+  function legacy(t,msg){try{var a=document.createElement("textarea");a.value=t;a.style.position="fixed";a.style.opacity="0";
+    document.body.appendChild(a);a.select();document.execCommand("copy");document.body.removeChild(a);toast(msg||"Copied");}
+    catch(e){toast("Copy failed");}}
+
+  function matches(h,q){if(!q)return true;q=q.toLowerCase();
+    return (h.name+" "+h.ip+" "+h.hostname+" "+h.os+" "+h.ports).toLowerCase().indexOf(q)!==-1;}
+
+  function shq(v){return "'"+String(v==null?"":v).replace(/'/g,"'\\''")+"'";}
+  function parseCred(creds){
+    var lines=(creds||"").split("\n");
+    for(var i=0;i<lines.length;i++){var l=lines[i].trim();if(!l)continue;
+      var u,p;if(l.indexOf(" : ")>-1){var k=l.indexOf(" : ");u=l.slice(0,k);p=l.slice(k+3);}
+      else if(l.indexOf(":")>-1){var j=l.indexOf(":");u=l.slice(0,j);p=l.slice(j+1);}
+      else{u=l;p="";}return [u.trim(),p.trim()];}
+    return ["",""];
+  }
+  function exportsBlock(h){
+    var c=parseCred(h.creds);
+    return ["ip","domain","rhost","box","user","pass"].map(function(k){
+      var v={ip:h.ip,domain:h.hostname,rhost:h.ip,box:h.name,user:c[0],pass:c[1]}[k];
+      return "export "+k+"="+shq(v);
+    }).join("\n");
+  }
+
+  function summary(h){
+    var L=["# "+(h.name||"host")+"  "+(h.ip||"")];
+    if(h.hostname)L.push("hostname: "+h.hostname);
+    if(h.os)L.push("os: "+h.os);
+    L.push("flag: "+flagLabel(h.flag));
+    if(h.ports)L.push("\nports:\n"+h.ports);
+    if(h.creds)L.push("\ncreds:\n"+h.creds);
+    if(h.notes)L.push("\nnotes:\n"+h.notes);
+    return L.join("\n");
+  }
+
+  function render(){
+    var q=document.getElementById("search").value.trim();
+    hostsEl.textContent="";var shown=0;
+    DATA.hosts.forEach(function(h){
+      if(!matches(h,q))return;shown++;
+      var open=(h.id in openMap)?openMap[h.id]:true;
+      var card=document.createElement("div");
+      card.className="host";card.dataset.flag=h.flag||"none";card.dataset.open=String(open);
+      var head=document.createElement("div");head.className="host-head";
+      head.innerHTML='<span class="chev">▼</span><span class="host-id">'+
+        '<span class="host-name">'+esc(h.name||"(unnamed)")+'</span>'+
+        '<span class="host-ip">'+esc(h.ip||"—")+'</span>'+
+        '<span class="host-os">'+esc(h.os||"")+'</span></span>'+
+        '<span class="pill pill-'+(h.flag||"none")+'">'+flagLabel(h.flag)+'</span>';
+      head.addEventListener("click",function(){openMap[h.id]=!open;render();});
+      var body=document.createElement("div");body.className="host-body";
+      var g=document.createElement("div");g.className="grid";
+      g.appendChild(valField("IP address",h.ip,true));
+      g.appendChild(valField("Hostname / domain",h.hostname,true));
+      g.appendChild(valField("OS",h.os,false));
+      g.appendChild(valField("Flag",flagLabel(h.flag),false));
+      if(h.ports)g.appendChild(blockField("Open ports / services",h.ports));
+      if(h.creds)g.appendChild(blockField("Credentials",h.creds));
+      if(h.notes)g.appendChild(blockField("Notes / foothold",h.notes,"notes"));
+      body.appendChild(g);
+      var foot=document.createElement("div");foot.className="host-foot";
+      var be=document.createElement("button");be.className="btn";be.textContent="Copy exports";
+      be.title="Copy  export ip=… domain=… user=… pass=…  to paste into a shell";
+      be.addEventListener("click",function(){copyText(exportsBlock(h),"Shell exports copied");});
+      var b=document.createElement("button");b.className="btn";b.textContent="Copy summary";
+      b.addEventListener("click",function(){copyText(summary(h),"Summary copied");});
+      foot.appendChild(be);foot.appendChild(b);body.appendChild(foot);
+      card.appendChild(head);card.appendChild(body);hostsEl.appendChild(card);
+    });
+    if(DATA.hosts.length===0){showState('No hosts yet. Add one with the CLI:'+
+      '<span class="cmd">oscp add Sauna --ip 10.10.11.42 --os Windows</span>');}
+    else if(shown===0){showState("No hosts match <code>"+esc(q)+"</code>.");}
+    else stateEl.hidden=true;
+    updateCounts();
+  }
+
+  function valField(label,val,copyable){
+    var f=document.createElement("div");f.className="field";
+    f.innerHTML='<label>'+esc(label)+'</label><div class="val">'+esc(val||"—")+
+      (copyable&&val?'<button class="copy" type="button">copy</button>':'')+'</div>';
+    if(copyable&&val)f.querySelector(".copy").addEventListener("click",function(){copyText(val,label+" copied");});
+    return f;
+  }
+  function blockField(label,val,extra){
+    var f=document.createElement("div");f.className="field wide";
+    f.innerHTML='<label>'+esc(label)+'</label><div class="val block '+(extra||"")+'">'+esc(val)+'</div>';
+    return f;
+  }
+  function showState(html,isErr){stateEl.hidden=false;stateEl.innerHTML=html;stateEl.classList.toggle("err",!!isErr);}
+
+  function updateCounts(){
+    document.getElementById("c-total").textContent=DATA.hosts.length;
+    document.getElementById("c-root").textContent=DATA.hosts.filter(function(h){return h.flag==="root";}).length;
+    document.getElementById("c-user").textContent=DATA.hosts.filter(function(h){return h.flag==="user";}).length;
+  }
+
+  function fmtUpdated(s){if(!s)return"";try{var d=new Date(s);if(isNaN(d))return s;
+    return d.toLocaleString(undefined,{year:"numeric",month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"});}catch(e){return s;}}
+
+  var LIVE=false, pollTimer=null, lastUpdated=null;
+
+  function apply(d,src){
+    if(!d||!Array.isArray(d.hosts))throw new Error("bad shape");
+    // Don't redraw mid-interaction if nothing changed (keeps open/closed cards steady).
+    if(d.updated&&d.updated===lastUpdated&&src==="poll")return;
+    lastUpdated=d.updated||null;DATA=d;render();
+    var badge=document.getElementById("mode");
+    if(LIVE){badge.textContent="live";badge.className="badge live";}
+    else{badge.textContent="static";badge.className="badge";}
+    footerEl.innerHTML=(LIVE?"live via <code>oscp serve</code>":"data/hosts.json")+
+      (d.updated?" · updated "+esc(fmtUpdated(d.updated)):"")+
+      " · edit with <code>oscp</code>"+(LIVE?" in another shell — this view refreshes itself":", then <code>oscp push</code>");
+  }
+
+  function load(){
+    // Prefer the live API (present only when served by `oscp serve`); fall back to the static file.
+    fetch("api/hosts",{cache:"no-store"})
+      .then(function(r){if(!r.ok)throw 0;return r.json();})
+      .then(function(d){LIVE=true;apply(d,"init");startPolling();})
+      .catch(function(){
+        fetch("data/hosts.json?t="+Date.now(),{cache:"no-store"})
+          .then(function(r){if(!r.ok)throw new Error(r.status);return r.json();})
+          .then(function(d){LIVE=false;apply(d,"init");})
+          .catch(function(e){
+            hostsEl.textContent="";
+            showState("Couldn't load <code>data/hosts.json</code> ("+esc(e.message)+").<br><br>"+
+              "If you opened the file with <code>file://</code>, browsers block that. Run the server instead:"+
+              '<span class="cmd">./oscp serve\n# then open http://127.0.0.1:8777</span>'+
+              "Once it's deployed on Cloudflare Pages this just works.",true);
+            footerEl.textContent="";
+          });
+      });
+  }
+
+  function startPolling(){
+    if(pollTimer)return;
+    pollTimer=setInterval(function(){
+      if(document.hidden)return;
+      fetch("api/hosts",{cache:"no-store"}).then(function(r){return r.json();})
+        .then(function(d){apply(d,"poll");}).catch(function(){});
+    },3000);
+  }
+
+  function initTheme(){try{var t=localStorage.getItem("oscp-theme");if(t)document.documentElement.setAttribute("data-theme",t);}catch(e){}}
+  function toggleTheme(){var cur=document.documentElement.getAttribute("data-theme");
+    var dark=cur?cur==="dark":matchMedia("(prefers-color-scheme:dark)").matches;var n=dark?"light":"dark";
+    document.documentElement.setAttribute("data-theme",n);try{localStorage.setItem("oscp-theme",n);}catch(e){}}
+
+  document.getElementById("search").addEventListener("input",render);
+  document.getElementById("btn-reload").addEventListener("click",function(){toast("Refreshing…");load();});
+  document.getElementById("btn-theme").addEventListener("click",toggleTheme);
+  initTheme();load();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,13 @@
+# oscp CLI config.  Copy to `oscp.conf` and edit. Lines are `key = value`, # = comment.
+# oscp.conf is gitignored (machine-local), so your settings don't get pushed.
+
+# Address `oscp serve` listens on. Keep it on localhost unless you know why not.
+addr = 127.0.0.1:8777
+
+# Your deployed site URL. Shown after `oscp push` as a reminder. Optional.
+site = https://oscp-lab-tracker.pages.dev
+
+# Fallback domain for `oscp env` / `target` when a host has no hostname of its own.
+# Handy for a single-AD lab: set it once here, and every box's $domain picks it up.
+# When a lab's domain changes, change this one line.
+domain =

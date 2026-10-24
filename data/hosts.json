@@ -1,0 +1,16 @@
+{
+  "hosts": [
+    {
+      "id": "h-example",
+      "name": "Example",
+      "ip": "10.10.11.42",
+      "hostname": "dc01.example.local",
+      "os": "Windows Server 2019",
+      "ports": "53, 88, 135, 139, 389, 445, 3268, 5985",
+      "creds": "svc_backup : Password123!",
+      "flag": "user",
+      "notes": "AS-REP roast cracked. WinRM on 5985. (delete with: oscp rm Example)"
+    }
+  ],
+  "updated": "2026-10-24T12:39:38Z"
+}
