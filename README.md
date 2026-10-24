@@ -23,6 +23,8 @@ No runtime, no dependencies — just one Go binary you can leave running on Kali
 10. [Finishing a lab (archive / clear)](#10-finishing-a-lab-archive--clear)
 11. [Hosting the mirror on GitHub + Cloudflare](#11-hosting-the-mirror-on-github--cloudflare)
 12. [Data, sync and git](#12-data-sync-and-git)
+13. [Running as root (and file permissions)](#13-running-as-root-and-file-permissions)
+14. [Troubleshooting](#14-troubleshooting)
 
 ---
 
@@ -361,3 +363,108 @@ ready for your first `oscp add`.
 `ports`, `creds` and `notes` are free-text strings (newlines allowed), so you can paste
 raw nmap output or scribble whatever you like. The CLI, the server and the site all treat
 them the same way.
+
+---
+
+## 13. Running as root (and file permissions)
+
+`oscp` **never needs root** — it only reads/writes files in this folder and serves on
+localhost. The tools you point it at (a SYN scan, etc.) may need root, but oscp itself
+doesn't.
+
+**Recommended:** run `oscp` / `target` as your normal user, and `sudo` only the individual
+tools that need it. Your variables still work, because your shell expands them *before*
+`sudo` runs:
+
+```bash
+target forest
+sudo nmap -sCV -p- $ip        # $ip is substituted by your shell, then sudo runs nmap
+```
+
+**Avoid `sudo su` then oscp.** Two things break:
+
+- In a root shell `~` becomes `/root`, and your shell functions aren't loaded there, so
+  `oscp` / `target` come back as *command not found*.
+- If you *do* run oscp as root, it writes `data/hosts.json`, `.current`, `archive/` and git
+  objects **owned by root**. Switch back to your normal user and you'll hit
+  *permission denied* / git *dubious ownership*, because your user can't write root-owned
+  files.
+
+If you'd rather live in a root shell, load the tool there and **stay consistent** — never
+half root, half user:
+
+```bash
+export OSCP_DIR=/home/kali/oscp-lab-tracker
+source "$OSCP_DIR/shell.sh"
+```
+
+Fix a mixed-ownership mess at any time with:
+
+```bash
+sudo chown -R kali:kali ~/oscp-lab-tracker
+```
+
+---
+
+## 14. Troubleshooting
+
+**`oscp: command not found`** — your shell hasn't loaded `shell.sh`. Run `source ~/.zshrc`
+(or open a new terminal). If you're in a root shell, see [section 13](#13-running-as-root-and-file-permissions).
+
+**It can't find the folder / uses the wrong directory** — `OSCP_DIR` points at the wrong
+place (e.g. after moving the repo). Point it at the real folder and reload:
+
+```bash
+cd /path/to/oscp-lab-tracker
+sed -i "s|^export OSCP_DIR=.*|export OSCP_DIR=\"$PWD\"|" ~/.zshrc
+source ~/.zshrc
+```
+
+Locate the repo with: `find ~ -type d -name oscp-lab-tracker 2>/dev/null`
+
+**Changes don't show after `git pull`** — the old binary is still running. Rebuild and
+restart:
+
+```bash
+go build -o oscp oscp.go
+oscp-down; oscp-up
+```
+
+**`git pull` refuses — "local changes to data/hosts.json"** — you edited hosts on this
+machine. Keep them (`oscp push`) or discard and pull:
+
+```bash
+git checkout -- data/hosts.json && git pull
+```
+
+**git: "A lock file already exists" / `index.lock`** — a git process didn't clean up.
+Remove the stale lock:
+
+```bash
+rm -f .git/index.lock
+```
+
+**"permission denied" writing data, or git "dubious ownership"** — files got created as
+root. Fix ownership ([section 13](#13-running-as-root-and-file-permissions)):
+
+```bash
+sudo chown -R kali:kali ~/oscp-lab-tracker
+```
+
+**Dashboard shows STATIC on `127.0.0.1:8777`** — hard-refresh with Ctrl+Shift+R. If it's
+still static, the server isn't running (`oscp-up`), or you're actually on the Cloudflare
+URL (which is always static by design — the live badge only appears on localhost).
+
+**`oscp serve`: "address already in use"** — a server is already running. `oscp-down`
+first, or change `addr` in `oscp.conf`.
+
+**Cloning a private repo fails with a password prompt** — GitHub dropped password auth for
+git. Use a Personal Access Token as the password, or SSH — see
+[section 11](#11-hosting-the-mirror-on-github--cloudflare).
+
+**`go: command not found`** — install Go, then rebuild:
+
+```bash
+sudo apt install -y golang-go     # or https://go.dev/dl/
+go build -o oscp oscp.go
+```
