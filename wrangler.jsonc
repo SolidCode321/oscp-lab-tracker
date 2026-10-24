@@ -1,0 +1,9 @@
+{
+  // Cloudflare Workers config — serves this repo as a static site (no server code).
+  "name": "oscp-lab-tracker",
+  "compatibility_date": "2026-09-01",
+  "assets": {
+    "directory": ".",
+    "not_found_handling": "single-page-application"
+  }
+}
