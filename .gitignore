@@ -1,0 +1,25 @@
+# python
+__pycache__/
+*.pyc
+*.json.tmp
+
+# machine-local focused target
+.current
+
+# lab archives (HTML snapshots contain credentials — keep them local)
+archive/
+
+# machine-local config (copy from oscp.conf.example)
+oscp.conf
+
+# compiled binary
+oscp
+oscp.exe
+
+# os
+.DS_Store
+Thumbs.db
+
+# editors
+.vscode/
+.idea/

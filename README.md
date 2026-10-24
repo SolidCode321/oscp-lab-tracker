@@ -89,6 +89,7 @@ Run from anywhere once you've set up the shell integration (step 5); otherwise
 | `oscp flag <host> none\|user\|root` | Mark flag captured |
 | `oscp rm <host>` | Delete a host |
 | `oscp env [host]` | Print shell exports (used by `target`) |
+| `oscp archive [name] [-y]` | Save an HTML snapshot of every host, then clear the tracker |
 | `oscp serve [--addr host:port]` | Run the live dashboard + API |
 | `oscp push ["msg"]` | `git commit` + `push` the data file |
 
@@ -243,7 +244,25 @@ That gives you a private, login-gated, synced copy of your notebook with no auth
 
 ---
 
-## 8. When a domain changes
+## 8. Finishing a lab
+
+When you're done with a set of boxes, snapshot and clear in one step:
+
+```bash
+oscp archive "pg-practice"     # -> archive/pg-practice-2026-10-24-1500.html, then empties the tracker
+```
+
+It writes a self-contained HTML report of every host (all IPs, ports, creds, notes)
+to the `archive/` folder, then removes all hosts so you start the next lab clean. The
+file opens in any browser offline — no server needed. It asks for confirmation first;
+pass `-y` to skip the prompt.
+
+> `archive/` is gitignored — the snapshots hold credentials, so they stay on your
+> machine and are never pushed.
+
+---
+
+## 9. When a domain changes
 
 - **One box changed:** `oscp set sauna hostname dc02.megabank.local` — then
   `target sauna` re-exports the new `$domain`.
@@ -252,7 +271,7 @@ That gives you a private, login-gated, synced copy of your notebook with no auth
 
 ---
 
-## 9. Data format
+## 10. Data format
 
 `data/hosts.json`:
 

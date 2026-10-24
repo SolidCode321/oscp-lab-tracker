@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"net/http"
 	"os"
 	"os/exec"
@@ -126,6 +127,8 @@ func main() {
 		err = cmdRm(args)
 	case "env":
 		err = cmdEnv(args)
+	case "archive", "wipe":
+		err = cmdArchive(args)
 	case "push":
 		err = cmdPush(args)
 	case "-h", "--help", "help":
@@ -534,6 +537,186 @@ func cmdEnv(a []string) error {
 	return nil
 }
 
+func cmdArchive(a []string) error {
+	fs := newFlags()
+	yes := fs.boolFlag("y", "yes")
+	pos, err := fs.parse(a)
+	if err != nil {
+		return err
+	}
+	s, err := load()
+	if err != nil {
+		return err
+	}
+	n := len(s.Hosts)
+	if n == 0 {
+		fmt.Println(dim("tracker is already empty - nothing to archive."))
+		return nil
+	}
+
+	name := "lab"
+	if len(pos) > 0 {
+		name = slug(strings.Join(pos, " "))
+	}
+	stamp := time.Now().Format("2006-01-02-1504")
+	dir := filepath.Join(root, "archive")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	outFile := filepath.Join(dir, name+"-"+stamp+".html")
+	rel, _ := filepath.Rel(root, outFile)
+	if rel == "" {
+		rel = outFile
+	}
+
+	// Confirm, since this clears every host.
+	if !*yes {
+		if !isTTY(os.Stdin) {
+			return fmt.Errorf("this clears all %d host(s). Re-run with --yes to confirm.", n)
+		}
+		fmt.Fprintf(os.Stderr, "Archive %d host(s) to %s and clear the tracker? [y/N] ", n, rel)
+		line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+		switch strings.ToLower(strings.TrimSpace(line)) {
+		case "y", "yes":
+		default:
+			fmt.Println(dim("cancelled - nothing changed."))
+			return nil
+		}
+	}
+
+	title := name
+	if title == "lab" {
+		title = "Lab archive"
+	}
+	htmlDoc := renderArchiveHTML(s, title, stamp)
+	if err := os.WriteFile(outFile, []byte(htmlDoc), 0o644); err != nil {
+		return err
+	}
+
+	// Wipe the tracker.
+	s.Hosts = []Host{}
+	if err := save(s); err != nil {
+		return err
+	}
+	os.Remove(currF) // the focused target no longer exists
+
+	ok(green("archived ") + fmt.Sprintf("%d host(s) -> ", n) + bold(rel))
+	fmt.Println(dim("tracker is now empty. Open the file in a browser to view the snapshot."))
+	return nil
+}
+
+func slug(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	var b strings.Builder
+	prevDash := false
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			prevDash = false
+		} else if !prevDash {
+			b.WriteByte('-')
+			prevDash = true
+		}
+	}
+	out := strings.Trim(b.String(), "-")
+	if out == "" {
+		return "lab"
+	}
+	return out
+}
+
+func renderArchiveHTML(s *Store, title, stamp string) string {
+	he := html.EscapeString
+	var root, user int
+	for _, h := range s.Hosts {
+		if h.Flag == "root" {
+			root++
+		} else if h.Flag == "user" {
+			user++
+		}
+	}
+	var b strings.Builder
+	b.WriteString(`<!doctype html><html lang="en"><head><meta charset="utf-8">`)
+	b.WriteString(`<meta name="viewport" content="width=device-width, initial-scale=1">`)
+	b.WriteString("<title>" + he(title) + " — archive</title>")
+	b.WriteString(`<style>
+:root{--bg:#f4f5f7;--surface:#fff;--surface2:#eef0f3;--fg:#1a1d23;--dim:#5b616e;--faint:#8a909c;
+--line:#d9dce2;--accent:#1f6feb;--good:#1a7f4b;--goods:#dcf3e6;--warn:#b06a00;--warns:#fbeecf;
+--mono:'JetBrains Mono',ui-monospace,Menlo,Consolas,monospace;--sans:'Inter',system-ui,-apple-system,sans-serif;color-scheme:light;}
+@media(prefers-color-scheme:dark){:root{--bg:#0d1016;--surface:#161a22;--surface2:#1d222c;--fg:#e7eaf0;--dim:#9aa2b1;
+--faint:#6b7280;--line:#2a303b;--accent:#4b8dff;--good:#4ac07e;--goods:#10261a;--warn:#d99a3a;--warns:#2a2011;color-scheme:dark;}}
+*{box-sizing:border-box;}body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);line-height:1.45;
+font-size:14px;-webkit-font-smoothing:antialiased;}
+.wrap{max-width:900px;margin:0 auto;padding:28px 16px 64px;}
+h1{font-size:19px;margin:0 0 2px;letter-spacing:-.01em;}
+.meta{font-family:var(--mono);font-size:11px;color:var(--faint);text-transform:uppercase;letter-spacing:.06em;}
+.counts{font-family:var(--mono);font-size:12px;color:var(--dim);margin:10px 0 22px;display:flex;gap:14px;flex-wrap:wrap;}
+.counts b{color:var(--fg);}.counts .r b{color:var(--good);}
+.host{background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--line);border-radius:9px;
+padding:14px 16px;margin-bottom:14px;}
+.host.root{border-left-color:var(--good);}.host.user{border-left-color:var(--warn);}
+.hh{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:10px;}
+.nm{font-weight:700;font-size:15px;}.ip{font-family:var(--mono);color:var(--accent);font-weight:500;}
+.os{font-size:11px;color:var(--dim);}
+.pill{font-family:var(--mono);font-size:9.5px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;
+padding:2px 7px;border-radius:20px;margin-left:auto;background:var(--surface2);color:var(--faint);}
+.pill.root{background:var(--goods);color:var(--good);}.pill.user{background:var(--warns);color:var(--warn);}
+.f{margin-top:9px;}.f .l{font-family:var(--mono);font-size:9.5px;text-transform:uppercase;letter-spacing:.08em;
+color:var(--faint);font-weight:600;display:block;margin-bottom:3px;}
+.f .v{font-family:var(--mono);font-size:12.5px;white-space:pre-wrap;word-break:break-word;}
+.f .v.block{background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:8px 10px;}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:9px 18px;}
+footer{margin-top:26px;font-family:var(--mono);font-size:10.5px;color:var(--faint);text-align:center;}
+@media(max-width:480px){.grid{grid-template-columns:1fr;}}
+</style></head><body><div class="wrap">`)
+	b.WriteString("<h1>" + he(title) + "</h1>")
+	b.WriteString(`<div class="meta">snapshot ` + he(stamp) + `</div>`)
+	b.WriteString(fmt.Sprintf(`<div class="counts"><span>hosts <b>%d</b></span><span class="r">root <b>%d</b></span><span>user <b>%d</b></span></div>`, len(s.Hosts), root, user))
+
+	for _, h := range s.Hosts {
+		cls := ""
+		pill := `<span class="pill">no flag</span>`
+		if h.Flag == "root" {
+			cls = " root"
+			pill = `<span class="pill root">root</span>`
+		} else if h.Flag == "user" {
+			cls = " user"
+			pill = `<span class="pill user">user</span>`
+		}
+		b.WriteString(`<div class="host` + cls + `"><div class="hh">`)
+		b.WriteString(`<span class="nm">` + he(orText(h.Name, "(unnamed)")) + `</span>`)
+		b.WriteString(`<span class="ip">` + he(orText(h.IP, "—")) + `</span>`)
+		if h.OS != "" {
+			b.WriteString(`<span class="os">` + he(h.OS) + `</span>`)
+		}
+		b.WriteString(pill + `</div><div class="grid">`)
+		if h.Hostname != "" {
+			b.WriteString(`<div class="f"><span class="l">Hostname / domain</span><span class="v">` + he(h.Hostname) + `</span></div>`)
+		}
+		if h.Ports != "" {
+			b.WriteString(`<div class="f" style="grid-column:1/-1"><span class="l">Open ports / services</span><span class="v block">` + he(h.Ports) + `</span></div>`)
+		}
+		if h.Creds != "" {
+			b.WriteString(`<div class="f" style="grid-column:1/-1"><span class="l">Credentials</span><span class="v block">` + he(h.Creds) + `</span></div>`)
+		}
+		if h.Notes != "" {
+			b.WriteString(`<div class="f" style="grid-column:1/-1"><span class="l">Notes</span><span class="v block">` + he(h.Notes) + `</span></div>`)
+		}
+		b.WriteString(`</div></div>`)
+	}
+
+	b.WriteString(`<footer>Generated by oscp · ` + he(stamp) + `</footer>`)
+	b.WriteString(`</div></body></html>`)
+	return b.String()
+}
+
+func orText(s, alt string) string {
+	if s == "" {
+		return alt
+	}
+	return s
+}
+
 func cmdPush(a []string) error {
 	s, _ := load()
 	msg := strings.Join(a, " ")
@@ -855,6 +1038,7 @@ usage: oscp <command> [args]
   flag <host> none|user|root set flag captured
   rm <host>                  delete a host
   env [host]                 print shell exports; omit host to reuse focused one
+  archive [name] [-y]        save an HTML snapshot of all hosts, then clear the tracker
   push ["msg"]               git commit + push data/hosts.json
 
 <host> matches an exact name/IP first, then a partial. Set NO_COLOR=1 to disable colour.
