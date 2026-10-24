@@ -860,6 +860,26 @@ func cmdServe(a []string) error {
 		writeJSON(w, map[string]any{"ok": true, "file": rel, "count": n, "html": htmlDoc})
 	})
 
+	// Clear all hosts from the dashboard (no snapshot).
+	mux.HandleFunc("/api/clear", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", 405)
+			return
+		}
+		s, err := load()
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		n := len(s.Hosts)
+		if err := clearAll(s); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		writeJSON(w, map[string]any{"ok": true, "count": n})
+	})
+
 	// Allowlist: the page and the data file only. Everything else (binary,
 	// source, config, dotfiles) stays private even though it sits in the repo dir.
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {

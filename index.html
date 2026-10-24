@@ -140,6 +140,7 @@
       <input id="search" class="search" type="text" placeholder="filter by name / ip / os / port…" autocomplete="off" spellcheck="false">
       <button class="btn" id="btn-reload" title="Re-fetch data/hosts.json">↻ Refresh</button>
       <button class="btn danger" id="btn-archive" hidden title="Snapshot all hosts to HTML, then clear the tracker">⤓ Archive &amp; clear</button>
+      <button class="btn danger" id="btn-clear" hidden title="Delete all hosts (no snapshot)">✕ Clear</button>
       <button class="btn" id="btn-theme" title="Toggle theme">◐ Theme</button>
     </div>
     <div class="archive-bar" id="archive-bar" hidden>
@@ -287,6 +288,7 @@
     if(LIVE){badge.textContent="live";badge.className="badge live";}
     else{badge.textContent="static";badge.className="badge";}
     document.getElementById("btn-archive").hidden=!(LIVE&&DATA.hosts.length>0);
+    document.getElementById("btn-clear").hidden=!(LIVE&&DATA.hosts.length>0);
     footerEl.innerHTML=(LIVE?"live via <code>oscp serve</code>":"data/hosts.json")+
       (d.updated?" · updated "+esc(fmtUpdated(d.updated)):"")+
       " · edit with <code>oscp</code>"+(LIVE?" in another shell — this view refreshes itself":", then <code>oscp push</code>");
@@ -362,6 +364,21 @@
   document.getElementById("ab-name").addEventListener("keydown",function(e){
     if(e.key==="Enter")document.getElementById("ab-go").click();
     if(e.key==="Escape")document.getElementById("ab-cancel").click();
+  });
+
+  var clearArmed=false,clearTimer=null,btnClear=document.getElementById("btn-clear");
+  btnClear.addEventListener("click",function(){
+    if(!clearArmed){
+      clearArmed=true;
+      btnClear.textContent="Clear all "+DATA.hosts.length+"? click again";
+      clearTimer=setTimeout(function(){clearArmed=false;btnClear.textContent="✕ Clear";},3000);
+      return;
+    }
+    clearTimeout(clearTimer);clearArmed=false;btnClear.textContent="✕ Clear";
+    fetch("api/clear",{method:"POST"})
+      .then(function(r){if(!r.ok)return r.text().then(function(t){throw new Error(t||r.status);});return r.json();})
+      .then(function(d){toast("Cleared "+d.count+" host(s)");load();})
+      .catch(function(e){toast("Clear failed: "+(e.message||e));});
   });
 
   document.getElementById("search").addEventListener("input",render);
